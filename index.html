@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Perth Suburb Mapper — prototype</title>
+  <title>Perth Suburb Mapper</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
         crossorigin="">
   <style>
-    /* PROTOTYPE — single file, no build, no optimisation. Throwaway. */
+    /* Single-file app. No build step. */
     :root {
       --pink-fill: #f472b6;
       --pink-fill-hover: #f472b6;
@@ -157,8 +157,7 @@
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
           crossorigin=""></script>
   <script type="module">
-    // PROTOTYPE — minimal vertical slice. Validates tickets 03, 04, 05, 06, 07, 08.
-    // State lives in memory; URL hash mirrors it. Throwaway.
+    // State lives in memory; URL hash mirrors it for shareable links.
 
     import {
       exportFilename,
