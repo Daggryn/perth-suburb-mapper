@@ -114,6 +114,37 @@ export function polygonCentroidLngLat(feature) {
   };
 }
 
+// Reproject every coordinate in a GeoJSON FeatureCollection from Web Mercator
+// (EPSG:3857) metres to lng/lat (CRS84) degrees, returning a new collection
+// suitable for Leaflet's `L.geoJSON`, which expects GeoJSON coordinates in
+// degrees. The data shipped in data/perth-suburbs.geojson is in metres; this
+// helper is the seam that keeps the on-disk format compact while letting the
+// browser render it. Pure, recursive; safe to run once at boot.
+export function fcMercatorToLngLat(featureCollection) {
+  return {
+    type: featureCollection.type,
+    features: featureCollection.features.map((f) => ({
+      type: f.type,
+      properties: f.properties,
+      geometry: {
+        type: f.geometry.type,
+        // bbox is in metres; leave it untouched — Leaflet only uses it for
+        // ordering, and the export pipeline ignores it.
+        bbox: f.geometry.bbox,
+        coordinates: convertRingCoords(f.geometry.coordinates),
+      },
+    })),
+  };
+}
+
+function convertRingCoords(coords) {
+  if (typeof coords[0] === 'number') {
+    const [lng, lat] = mercatorToLngLat(coords[0], coords[1]);
+    return [lng, lat];
+  }
+  return coords.map(convertRingCoords);
+}
+
 // Standard "slippy map" tile coords (https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames).
 // Returns floor(x), floor(y) — the tile that contains the given lat/lng.
 // Clamps to [0, n-1] in y to absorb floating-point noise at the polar edges;

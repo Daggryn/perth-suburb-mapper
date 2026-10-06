@@ -161,6 +161,7 @@
 
     import {
       exportFilename,
+      fcMercatorToLngLat,
       mercatorToLngLat,
       selectionBoundsInLatLng,
       padBoundsLatLng,
@@ -174,7 +175,8 @@
 
     const selected = new Set();   // short IDs
     const labels = new Map();     // short ID → edited text
-    let suburbsData = null;       // loaded GeoJSON FeatureCollection
+    let suburbsData = null;        // loaded GeoJSON FeatureCollection (Web Mercator metres — kept for the export pipeline)
+    let suburbsLngLat = null;     // same data reprojected to lng/lat degrees for Leaflet rendering
     const layerById = new Map();  // short ID → Leaflet feature layer
     const labelByLayer = new Map(); // Leaflet layer → L.marker (the label)
 
@@ -696,10 +698,16 @@
         const res = await fetch('data/perth-suburbs.geojson');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         suburbsData = await res.json();
+        // Leaflet's L.geoJSON expects GeoJSON coordinates in CRS84 (lng/lat
+        // degrees). The shipped data is in Web Mercator (EPSG:3857) metres
+        // — reproject before handing it to Leaflet so each polygon actually
+        // has geometry. Without this step the SVG paths collapse to "M0 0"
+        // and click handlers never fire (issue #1).
+        suburbsLngLat = fcMercatorToLngLat(suburbsData);
 
         applyUrlState(readUrl());
 
-        L.geoJSON(suburbsData, {
+        L.geoJSON(suburbsLngLat, {
           style: styleFor,
           onEachFeature: (feature, layer) => {
             layerById.set(feature.properties.id, layer);

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 
 import {
   exportFilename,
+  fcMercatorToLngLat,
   selectionBoundsInLatLng,
   padBoundsLatLng,
   expandToMin,
@@ -337,4 +338,128 @@ test('integration — selectionBoundsInLatLng on the full set matches the data b
   assert.ok(b.maxLng >= meta.bbox.source[2], `max lng ${b.maxLng}`);
   assert.ok(b.minLat <= meta.bbox.source[1], `min lat ${b.minLat}`);
   assert.ok(b.maxLat >= meta.bbox.source[3], `max lat ${b.maxLat}`);
+});
+
+// fcMercatorToLngLat: convert a FeatureCollection from Web Mercator metres to
+// lng/lat degrees. Pure recursive descent through (Multi)Polygon coords.
+test('fcMercatorToLngLat — Polygon ring in metres becomes a ring in lng/lat', () => {
+  // Warnbro-ish Web Mercator metres, from data/perth-suburbs.geojson.
+  const fc = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: { id: 'CMCA7', name: 'Warnbro' },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[
+          [12884390, -3806365], [12884390, -3806361], [12884403, -3806352],
+          [12884390, -3806365],
+        ]],
+      },
+    }],
+  };
+  const out = fcMercatorToLngLat(fc);
+  assert.equal(out.type, 'FeatureCollection');
+  assert.equal(out.features.length, 1);
+  assert.equal(out.features[0].properties.id, 'CMCA7');
+  const ring = out.features[0].geometry.coordinates[0];
+  assert.equal(ring.length, 4);
+  // Each pair must be inside the Greater Perth bbox (lng 115.5..116.2, lat -32.5..-31.7).
+  for (const [lng, lat] of ring) {
+    assert.ok(lng > 115.5 && lng < 116.2, `lng ${lng}`);
+    assert.ok(lat > -32.5 && lat < -31.7, `lat ${lat}`);
+  }
+  // First vertex specifically — Warnbro sits around (115.75, -32.34).
+  assert.ok(Math.abs(ring[0][0] - 115.75) < 0.05, `first lng ${ring[0][0]}`);
+  assert.ok(Math.abs(ring[0][1] - (-32.34)) < 0.05, `first lat ${ring[0][1]}`);
+});
+
+test('fcMercatorToLngLat — MultiPolygon preserves outer + inner ring shape', () => {
+  const fc = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: { id: 'mp', name: 'Multi' },
+      geometry: {
+        type: 'MultiPolygon',
+        coordinates: [
+          [
+            [[12884390, -3806365], [12884390, -3806361], [12884403, -3806352], [12884390, -3806365]],
+          ],
+          [
+            [[12885000, -3806000], [12885000, -3805990], [12885100, -3805990], [12885000, -3806000]],
+            [[12885020, -3805995], [12885080, -3805995], [12885080, -3805992], [12885020, -3805995]],
+          ],
+        ],
+      },
+    }],
+  };
+  const out = fcMercatorToLngLat(fc);
+  const polys = out.features[0].geometry.coordinates;
+  assert.equal(polys.length, 2, 'multi-polygon should keep two parts');
+  assert.equal(polys[0][0].length, 4, 'outer ring of part 0');
+  assert.equal(polys[1][0].length, 4, 'outer ring of part 1');
+  assert.equal(polys[1][1].length, 4, 'inner ring of part 1 (hole)');
+  // All coords land inside Greater Perth.
+  for (const poly of polys) {
+    for (const ring of poly) {
+      for (const [lng, lat] of ring) {
+        assert.ok(lng > 115.5 && lng < 116.2, `lng ${lng}`);
+        assert.ok(lat > -32.5 && lat < -31.7, `lat ${lat}`);
+      }
+    }
+  }
+});
+
+test('fcMercatorToLngLat — does not mutate the input', () => {
+  const fc = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: { id: 'a', name: 'a' },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[12884390, -3806365], [12884390, -3806361], [12884390, -3806365]]],
+      },
+    }],
+  };
+  const original = JSON.parse(JSON.stringify(fc));
+  fcMercatorToLngLat(fc);
+  assert.deepEqual(fc, original);
+});
+
+test('integration — fcMercatorToLngLat on the real data lands everything in the Greater Perth envelope', async () => {
+  const fc = JSON.parse(readFileSync(resolve(DATA_DIR, 'perth-suburbs.geojson'), 'utf8'));
+  const out = fcMercatorToLngLat(fc);
+  assert.equal(out.features.length, fc.features.length);
+
+  // The build script filters by "any vertex in" Greater Perth
+  // ([115.5, -32.5]..[116.2, -31.7]), so suburbs can extend past the box.
+  // Derive the looser envelope from the data's declared Web Mercator bbox.
+  const meta = JSON.parse(readFileSync(resolve(DATA_DIR, 'perth-suburbs.meta.json'), 'utf8'));
+  const { mercatorToLngLat } = await import('./export-pipeline.mjs');
+  const [mxMin, myMin, mxMax, myMax] = meta.bbox.output;
+  const [nwLng, nwLat] = mercatorToLngLat(mxMin, myMax);
+  const [seLng, seLat] = mercatorToLngLat(mxMax, myMin);
+  // Slop for any rounding noise in the declared bbox.
+  const SLOP = 0.01;
+  const loLng = Math.min(nwLng, seLng) - SLOP;
+  const hiLng = Math.max(nwLng, seLng) + SLOP;
+  const loLat = Math.min(seLat, nwLat) - SLOP;
+  const hiLat = Math.max(seLat, nwLat) + SLOP;
+
+  let empty = 0;
+  for (const f of out.features) {
+    // For Polygon, coordinates[0] is the outer ring. For MultiPolygon, it's
+    // the first polygon's outer ring. Either way it's the array of points.
+    const ring = f.geometry.coordinates[0];
+    if (!ring || ring.length < 3) { empty++; continue; }
+    for (const [lng, lat] of ring) {
+      assert.ok(typeof lng === 'number' && isFinite(lng), `lng ${lng}`);
+      assert.ok(typeof lat === 'number' && isFinite(lat), `lat ${lat}`);
+      assert.ok(lng >= loLng && lng <= hiLng, `lng ${lng} outside [${loLng}, ${hiLng}]`);
+      assert.ok(lat >= loLat && lat <= hiLat, `lat ${lat} outside [${loLat}, ${hiLat}]`);
+    }
+  }
+  assert.equal(empty, 0, 'every feature should have a non-empty ring after reprojection');
 });
