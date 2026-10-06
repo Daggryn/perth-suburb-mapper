@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Perth Suburb Mapper — prototype</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin="">
+  <style>
+    /* PROTOTYPE — single file, no build, no optimisation. Throwaway. */
+    :root {
+      --pink-fill: #f472b6;
+      --pink-fill-hover: #f472b6;
+      --pink-border: #be185d;
+      --pink-edit: #f472b6;
+      --label-fg: #1f2937;
+      --bg-footer: #f9fafb;
+      --fg-footer: #4b5563;
+      --fg-link: #1d4ed8;
+      --control-bg: #ffffff;
+      --control-fg: #1f2937;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      display: flex;
+      flex-direction: column;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--control-fg);
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #e5e7eb;
+      background: var(--control-bg);
+      flex-shrink: 0;
+    }
+    .controls button {
+      font: inherit;
+      padding: 6px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      background: var(--control-bg);
+      color: var(--control-fg);
+      cursor: pointer;
+    }
+    .controls button:hover:not([disabled]) { background: #f3f4f6; }
+    .controls button[disabled] { opacity: 0.4; cursor: not-allowed; }
+    #map { flex: 1 1 auto; }
+    .footer {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 8px 12px;
+      border-top: 1px solid #e5e7eb;
+      background: var(--bg-footer);
+      color: var(--fg-footer);
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    .footer a { color: var(--fg-link); }
+    /* Mobile footer collapse (ticket 15): on viewports < 600 px the
+       footer auto-collapses to a small "i" button 2 s after load and
+       re-collapses 5 s after a tap-to-expand. On desktop the button is
+       always hidden. The two states share one DOM tree — JS flips a data
+       attribute and CSS swaps which child is visible. */
+    .footer-info {
+      display: none;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid var(--fg-footer);
+      background: var(--bg-footer);
+      color: var(--fg-footer);
+      font: 600 14px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+    }
+    .suburb-label {
+      font: 13px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--label-fg);
+      text-shadow:
+        -1px -1px 0 #fff,
+         1px -1px 0 #fff,
+        -1px  1px 0 #fff,
+         1px  1px 0 #fff;
+      white-space: pre-wrap;
+      cursor: pointer;
+      user-select: none;
+      pointer-events: auto;
+    }
+    .suburb-label[contenteditable="true"] {
+      cursor: text;
+      user-select: text;
+      outline: 2px solid var(--pink-edit);
+      background: rgba(255, 255, 255, 0.85);
+    }
+    /* Override Leaflet attribution (we render our own footer per ticket 07) */
+    .leaflet-control-attribution { display: none; }
+    /* Mobile bottom-bar layout (ticket 14): below 600 px, the controls
+       swap to render between the map and the footer. We keep the DOM
+       order stable so the same nodes just reflow — no resize flash. */
+    @media (max-width: 599px) {
+      #map { order: 1; }
+      .controls { order: 2; }
+      .footer { order: 3; }
+      .controls button {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 10px 14px;
+      }
+      /* Footer auto-collapse (ticket 15). The collapsed state hides the
+         attribution text and reveals the "i" button as a flex item so it
+         stays inside the footer's box (an absolutely-positioned button
+         would hang below the footer when its content is hidden and the
+         footer shrinks to just padding). Expanded state is the default;
+         JS flips the `data-collapsed` attribute on a 2 s / 5 s timer. */
+      .footer[data-collapsed="true"] .footer-info {
+        display: flex;
+        align-self: flex-end;
+      }
+      .footer[data-collapsed="true"] .footer-content { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <button id="export-btn" disabled title="Select at least one suburb first.">Export PNG</button>
+    <button id="clear-btn" disabled>Clear</button>
+  </div>
+  <div id="map"></div>
+  <div class="footer" id="footer" data-collapsed="false">
+    <button class="footer-info" id="footer-info" type="button"
+            aria-label="Show attribution" aria-expanded="true">i</button>
+    <div class="footer-content">
+      <div>
+        Suburbs ©
+        <a href="https://data.gov.au/data/dataset/wa-suburb-locality-boundaries-geoscape-administrative-boundaries">Geoscape Australia</a>
+        (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>)
+      </div>
+      <div>
+        Map ©
+        <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>
+      </div>
+    </div>
+  </div>
+  <noscript>
+    <div style="padding: 24px; text-align: center; font-family: system-ui, sans-serif;">
+      JavaScript is required to use Perth Suburb Mapper.
+    </div>
+  </noscript>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""></script>
+  <script type="module">
+    // PROTOTYPE — minimal vertical slice. Validates tickets 03, 04, 05, 06, 07, 08.
+    // State lives in memory; URL hash mirrors it. Throwaway.
+
+    import {
+      exportFilename,
+      mercatorToLngLat,
+      selectionBoundsInLatLng,
+      padBoundsLatLng,
+      expandToMin,
+      polygonCentroidLngLat,
+      tileRangeForBounds,
+    } from './scripts/export-pipeline.mjs';
+
+    const PINK_FILL = '#f472b6';
+    const PINK_BORDER = '#be185d';
+
+    const selected = new Set();   // short IDs
+    const labels = new Map();     // short ID → edited text
+    let suburbsData = null;       // loaded GeoJSON FeatureCollection
+    const layerById = new Map();  // short ID → Leaflet feature layer
+    const labelByLayer = new Map(); // Leaflet layer → L.marker (the label)
+
+    // ---- Map ----
+    const map = L.map('map', {
+      zoomControl: true,
+      attributionControl: false,
+      minZoom: 9,
+      maxZoom: 18,
+      zoom: 9,
+      center: [-31.95, 115.85],
+    });
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      crossOrigin: true,
+    }).addTo(map);
+
+    // ---- Per-feature styles (ticket 04) ----
+    function styleFor(feature) {
+      const id = feature.properties.id;
+      const isSelected = selected.has(id);
+      if (isSelected) {
+        return {
+          weight: 2,
+          color: PINK_BORDER,
+          fillColor: PINK_FILL,
+          fillOpacity: 0.6,
+        };
+      }
+      // Idle + hover (decided separately by mouseover/out)
+      return {
+        weight: 0,
+        color: 'transparent',
+        fillColor: PINK_FILL,
+        fillOpacity: 0,
+        opacity: 0,
+      };
+    }
+
+    // ---- Hover styling (suburb 04) ----
+    function applyHover(feature, on) {
+      const layer = layerById.get(feature.properties.id);
+      if (!layer) return;
+      const id = feature.properties.id;
+      const isSelected = selected.has(id);
+      if (isSelected) {
+        // Selected hover: opacity bump 0.6 → 0.85
+        layer.setStyle({
+          fillOpacity: on ? 0.85 : 0.6,
+        });
+      } else {
+        // Unselected hover: pink tint @ 0.2
+        if (on) {
+          layer.setStyle({
+            weight: 0,
+            color: 'transparent',
+            fillColor: PINK_FILL,
+            fillOpacity: 0.2,
+          });
+        } else {
+          layer.setStyle({
+            weight: 0,
+            color: 'transparent',
+            fillColor: PINK_FILL,
+            fillOpacity: 0,
+          });
+        }
+      }
+    }
+
+    // ---- Pan-vs-click suppression (ticket 06) ----
+    let suppressNextClick = false;
+    map.on('dragstart', () => { suppressNextClick = true; });
+    map.on('moveend', () => { suppressNextClick = false; });
+
+    // ---- Click toggle ----
+    function toggleFeature(feature) {
+      const id = feature.properties.id;
+      if (selected.has(id)) {
+        selected.delete(id);
+        labels.delete(id);  // ticket 05: labels removed when suburb deselected
+        removeLabel(feature);
+      } else {
+        selected.add(id);
+        addLabel(feature);
+      }
+      const layer = layerById.get(id);
+      if (layer) layer.setStyle(styleFor(feature));
+      refreshControls();
+      scheduleUrlWrite();
+    }
+
+    // ---- Labels (ticket 05) ----
+    function labelText(feature) {
+      const id = feature.properties.id;
+      return labels.has(id) ? labels.get(id) : feature.properties.name;
+    }
+
+    function addLabel(feature) {
+      const id = feature.properties.id;
+      const layer = layerById.get(id);
+      if (!layer) return;
+      const c = layer.getBounds().getCenter();
+      const html = `<span class="suburb-label" data-id="${id}">${escapeHtml(labelText(feature))}</span>`;
+      const icon = L.divIcon({
+        html,
+        className: '',
+        iconSize: null,
+        iconAnchor: [0, 0],
+      });
+      const marker = L.marker(c, { icon, interactive: true, keyboard: false }).addTo(map);
+      marker.on('click', (e) => {
+        L.DomEvent.stopPropagation(e);
+        startEdit(feature, marker);
+      });
+      labelByLayer.set(layer, marker);
+    }
+
+    function removeLabel(feature) {
+      const layer = layerById.get(feature.properties.id);
+      const marker = labelByLayer.get(layer);
+      if (marker) {
+        map.removeLayer(marker);
+        labelByLayer.delete(layer);
+      }
+    }
+
+    function refreshLabel(feature) {
+      const id = feature.properties.id;
+      const layer = layerById.get(id);
+      const marker = labelByLayer.get(layer);
+      if (!marker) return;
+      marker.getElement().querySelector('.suburb-label').textContent = labelText(feature);
+    }
+
+    function startEdit(feature, marker) {
+      const span = marker.getElement().querySelector('.suburb-label');
+      const id = feature.properties.id;
+      span.setAttribute('data-prev', labelText(feature));
+      span.contentEditable = 'true';
+      span.focus();
+      // Select all text
+      const range = document.createRange();
+      range.selectNodeContents(span);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      function commit() {
+        span.contentEditable = 'false';
+        const text = span.textContent;
+        span.removeEventListener('keydown', onKey);
+        span.removeEventListener('blur', commit);
+        if (text === '') {
+          // Empty save falls back to suburb default (ticket 05)
+          labels.delete(id);
+        } else {
+          labels.set(id, text);
+        }
+        refreshLabel(feature);
+        scheduleUrlWrite();
+      }
+      function onKey(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          span.blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          span.textContent = span.getAttribute('data-prev');
+          span.blur();
+        }
+      }
+      span.addEventListener('keydown', onKey);
+      span.addEventListener('blur', commit);
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
+
+    // ---- URL state (ticket 03) ----
+    function writeUrl() {
+      const payload = {
+        s: [...selected],
+        l: Object.fromEntries(labels),
+        v: { lat: map.getCenter().lat, lng: map.getCenter().lng, z: map.getZoom() },
+      };
+      const json = JSON.stringify(payload);
+      const enc = btoa(unescape(encodeURIComponent(json)));
+      history.replaceState(null, '', `#v1.${enc}`);
+    }
+    function readUrl() {
+      const hash = location.hash;
+      if (!hash.startsWith('#v1.')) return null;
+      try {
+        const json = decodeURIComponent(escape(atob(hash.slice(4))));
+        return JSON.parse(json);
+      } catch (_) { return null; }
+    }
+    let urlTimer = null;
+    function scheduleUrlWrite() {
+      clearTimeout(urlTimer);
+      urlTimer = setTimeout(writeUrl, 300);
+    }
+    map.on('moveend zoomend', scheduleUrlWrite);
+
+    function applyUrlState(state) {
+      if (!state) return;
+      if (Array.isArray(state.s)) for (const id of state.s) selected.add(id);
+      if (state.l && typeof state.l === 'object') {
+        for (const [id, text] of Object.entries(state.l)) {
+          if (typeof text === 'string' && text.length > 0) labels.set(id, text);
+        }
+      }
+      if (state.v && typeof state.v.lat === 'number' && typeof state.v.lng === 'number' && typeof state.v.z === 'number') {
+        map.setView([state.v.lat, state.v.lng], state.v.z, { animate: false });
+      }
+    }
+
+    // ---- Controls ----
+    const exportBtn = document.getElementById('export-btn');
+    const clearBtn = document.getElementById('clear-btn');
+
+    function refreshControls() {
+      exportBtn.disabled = selected.size === 0;
+      clearBtn.disabled = selected.size === 0;
+    }
+
+    exportBtn.addEventListener('click', () => {
+      // Custom canvas pipeline (ticket 13). ~150 lines below.
+      exportPng();
+    });
+
+    // ---- Export PNG pipeline (ticket 13) ----
+    // Custom canvas pipeline: white background, OSM tiles via Image +
+    // crossOrigin, polygons redrawn from the in-memory GeoJSON in Web
+    // Mercator projected to pixel coords at the current zoom, labels and
+    // attribution redrawn with a white halo. Pure math helpers come from
+    // scripts/export-pipeline.mjs (also imported by the test suite).
+
+    const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    const TILE_SIZE = 256;
+    const SCALE = 2;                  // 2× CSS-pixel rendering (ticket 13)
+    const EXPORT_MIN_PX = 1024;       // minimum canvas dimension (ticket 13)
+    const PAD_FRACTION = 0.05;        // bbox padding (ticket 06 / 13)
+
+    // Cache tile images so re-exports in the same session don't re-hit OSM.
+    const tileCache = new Map();
+    function loadTile(z, x, y) {
+      const key = `${z}/${x}/${y}`;
+      const cached = tileCache.get(key);
+      if (cached) return cached;
+      const p = new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error(`tile ${key} failed to load`));
+        img.src = TILE_URL.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+      });
+      tileCache.set(key, p);
+      return p;
+    }
+
+    function loadAllTiles(z, tileList) {
+      return Promise.all(tileList.map((t) => loadTile(z, t.x, t.y).then(
+        (img) => ({ img, t }),
+        (err) => ({ err, t }), // tolerate a single missing tile
+      )));
+    }
+
+    function drawPolygon(ctx, feature, nw, dx, dy, project, scale) {
+      const rings = feature.geometry.type === 'MultiPolygon'
+        ? feature.geometry.coordinates.flat()
+        : feature.geometry.coordinates;
+      ctx.beginPath();
+      for (const ring of rings) {
+        for (let i = 0; i < ring.length; i++) {
+          const [mx, my] = ring[i];
+          const [lng, lat] = mercatorToLngLat(mx, my);
+          const p = project(lat, lng);
+          const cx = (p.x - nw.x) * scale + dx;
+          const cy = (p.y - nw.y) * scale + dy;
+          if (i === 0) ctx.moveTo(cx, cy);
+          else ctx.lineTo(cx, cy);
+        }
+        ctx.closePath();
+      }
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    function drawLabel(ctx, text, x, y, scale) {
+      ctx.font = `${13 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+      ctx.fillStyle = '#1f2937';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // 4-direction white halo — mirrors the page's text-shadow rule (ticket 05).
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 0;
+      for (const [ox, oy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        ctx.shadowOffsetX = ox * scale;
+        ctx.shadowOffsetY = oy * scale;
+        ctx.fillText(text, x, y);
+      }
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.fillText(text, x, y);
+    }
+
+    function drawAttribution(ctx, w, h, scale) {
+      ctx.font = `${9 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      const padding = 8 * scale;
+      const lineH = 9 * scale;
+      ctx.fillStyle = '#1f2937';
+      // White halo for attribution on top of busy tiles.
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 3 * scale;
+      ctx.fillText('Suburbs © Geoscape Australia (CC BY 4.0)', w - padding, h - padding - lineH);
+      ctx.fillText('Map © OpenStreetMap contributors', w - padding, h - padding);
+      ctx.shadowBlur = 0;
+      ctx.fillText('Suburbs © Geoscape Australia (CC BY 4.0)', w - padding, h - padding - lineH);
+      ctx.fillText('Map © OpenStreetMap contributors', w - padding, h - padding);
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    let exporting = false;
+    async function exportPng() {
+      if (selected.size === 0 || exporting) return;
+      exporting = true;
+      exportBtn.disabled = true;
+      try {
+        const baseBounds = selectionBoundsInLatLng(suburbsData, selected);
+        if (!baseBounds) return;
+        const padded = padBoundsLatLng(baseBounds, PAD_FRACTION);
+
+        const zoom = map.getZoom();
+        const CRS = L.CRS.EPSG3857;
+        // Absolute pixel coords at zoom `zoom` (independent of the map's
+        // current pan). The CRS gives world-pixel coords; the map's own
+        // project() applies a transformation we don't want here.
+        const project = (lat, lng) => CRS.latLngToPoint(L.latLng(lat, lng), zoom);
+        const nw = project(padded.maxLat, padded.minLng);
+        const se = project(padded.minLat, padded.maxLng);
+        const paddedW = se.x - nw.x;
+        const paddedH = se.y - nw.y;
+
+        const exp = expandToMin({ width: paddedW, height: paddedH }, EXPORT_MIN_PX);
+        const dxPx = exp.dx * SCALE;
+        const dyPx = exp.dy * SCALE;
+        const canvasW = exp.width * SCALE;
+        const canvasH = exp.height * SCALE;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = canvasW;
+        canvas.height = canvasH;
+        const ctx = canvas.getContext('2d');
+
+        // White background.
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+
+        // Tiles.
+        const tiles = tileRangeForBounds(padded, zoom);
+        const loaded = await loadAllTiles(zoom, tiles);
+        for (const { img, t, err } of loaded) {
+          if (err) continue;
+          const tilePx = L.point(t.x * TILE_SIZE, t.y * TILE_SIZE);
+          ctx.drawImage(
+            img,
+            (tilePx.x - nw.x) * SCALE + dxPx,
+            (tilePx.y - nw.y) * SCALE + dyPx,
+            TILE_SIZE * SCALE,
+            TILE_SIZE * SCALE,
+          );
+        }
+
+        // Selected polygons.
+        ctx.fillStyle = 'rgba(244, 114, 182, 0.6)';
+        ctx.strokeStyle = '#be185d';
+        ctx.lineWidth = 2 * SCALE;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        for (const id of selected) {
+          const feature = suburbsData.features.find((f) => f.properties.id === id);
+          if (!feature) continue;
+          drawPolygon(ctx, feature, nw, dxPx, dyPx, project, SCALE);
+        }
+
+        // Labels.
+        for (const id of selected) {
+          const feature = suburbsData.features.find((f) => f.properties.id === id);
+          if (!feature) continue;
+          const c = polygonCentroidLngLat(feature);
+          const p = project(c.lat, c.lng);
+          const cx = (p.x - nw.x) * SCALE + dxPx;
+          const cy = (p.y - nw.y) * SCALE + dyPx;
+          drawLabel(ctx, labelText(feature), cx, cy, SCALE);
+        }
+
+        // Attribution.
+        drawAttribution(ctx, canvasW, canvasH, SCALE);
+
+        await new Promise((resolve, reject) => {
+          canvas.toBlob((blob) => {
+            if (!blob) { reject(new Error('canvas.toBlob returned null')); return; }
+            downloadBlob(blob, exportFilename());
+            resolve();
+          }, 'image/png');
+        });
+      } catch (e) {
+        console.error(e);
+        alert(`Export failed: ${e.message}`);
+      } finally {
+        exporting = false;
+        refreshControls();
+      }
+    }
+
+    clearBtn.addEventListener('click', () => {
+      const ids = [...selected];
+      selected.clear();
+      labels.clear();
+      for (const id of ids) {
+        const layer = layerById.get(id);
+        if (layer) layer.setStyle({
+          weight: 0, color: 'transparent', fillColor: PINK_FILL, fillOpacity: 0,
+        });
+        removeLabel({ properties: { id } });
+      }
+      refreshControls();
+      scheduleUrlWrite();
+    });
+
+    // ---- Footer auto-collapse (ticket 15) ----
+    // On viewports < 600 px the attribution footer auto-collapses to a
+    // small "i" button 2 s after load, and re-collapses 5 s after the
+    // user taps it to expand. On desktop (>= 600 px) the footer is always
+    // visible. The two states share one DOM tree — JS flips the footer's
+    // `data-collapsed` attribute and CSS swaps which child is visible.
+    const FOOTER_BREAKPOINT_PX = 599;        // matches the CSS @media
+    const FOOTER_INITIAL_COLLAPSE_MS = 2000; // ticket 15: collapse 2 s after load
+    const FOOTER_TAP_RECOLLAPSE_MS = 5000;   // ticket 15: collapse 5 s after a tap-expand
+    const footerEl = document.getElementById('footer');
+    const footerInfoEl = document.getElementById('footer-info');
+    const footerMql = window.matchMedia(`(max-width: ${FOOTER_BREAKPOINT_PX}px)`);
+    let footerCollapseTimer = null;
+
+    function footerIsMobile() {
+      return footerMql.matches;
+    }
+
+    function footerSetCollapsed(collapsed) {
+      footerEl.dataset.collapsed = collapsed ? 'true' : 'false';
+      footerInfoEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    }
+
+    function footerCancelCollapse() {
+      if (footerCollapseTimer !== null) {
+        clearTimeout(footerCollapseTimer);
+        footerCollapseTimer = null;
+      }
+    }
+
+    function footerScheduleCollapse(ms) {
+      footerCancelCollapse();
+      footerCollapseTimer = setTimeout(() => {
+        footerCollapseTimer = null;
+        footerSetCollapsed(true);
+      }, ms);
+    }
+
+    function footerApplyToViewport() {
+      if (!footerIsMobile()) {
+        // Desktop: never collapse. Cancel any pending collapse and force
+        // the expanded state so the attribution is always reachable.
+        footerCancelCollapse();
+        footerSetCollapsed(false);
+      } else {
+        // Mobile: start expanded, then auto-collapse after the initial
+        // delay. A resize from desktop into mobile should re-arm this.
+        footerSetCollapsed(false);
+        footerScheduleCollapse(FOOTER_INITIAL_COLLAPSE_MS);
+      }
+    }
+
+    footerInfoEl.addEventListener('click', () => {
+      footerCancelCollapse();
+      footerSetCollapsed(false);
+      if (footerIsMobile()) {
+        footerScheduleCollapse(FOOTER_TAP_RECOLLAPSE_MS);
+      }
+    });
+
+    // React when the viewport crosses the breakpoint so we don't end up
+    // stuck in the wrong state if the user rotates their phone or
+    // resizes the window.
+    footerMql.addEventListener('change', footerApplyToViewport);
+
+    footerApplyToViewport();
+
+    // ---- Boot ----
+    (async () => {
+      try {
+        const res = await fetch('data/perth-suburbs.geojson');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        suburbsData = await res.json();
+
+        applyUrlState(readUrl());
+
+        L.geoJSON(suburbsData, {
+          style: styleFor,
+          onEachFeature: (feature, layer) => {
+            layerById.set(feature.properties.id, layer);
+            layer.on('mouseover', () => applyHover(feature, true));
+            layer.on('mouseout',  () => applyHover(feature, false));
+            layer.on('click', (e) => {
+              if (suppressNextClick) {
+                suppressNextClick = false;
+                L.DomEvent.stopPropagation(e);
+                return;
+              }
+              L.DomEvent.stopPropagation(e);
+              toggleFeature(feature);
+            });
+          },
+        }).addTo(map);
+
+        // Re-add labels for any IDs that came in via the URL hash.
+        for (const id of selected) {
+          const feat = suburbsData.features.find((f) => f.properties.id === id);
+          if (feat) addLabel(feat);
+        }
+        refreshControls();
+        scheduleUrlWrite();
+      } catch (e) {
+        console.error(e);
+        document.getElementById('map').innerHTML =
+          `<div style="padding:24px;font-family:system-ui">Failed to load suburbs data: ${e.message}</div>`;
+      }
+    })();
+  </script>
+</body>
+</html>

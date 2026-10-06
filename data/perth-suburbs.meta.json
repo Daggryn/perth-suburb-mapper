@@ -1,0 +1,33 @@
+{
+  "dataset": {
+    "title": "WA Suburb/Locality Boundaries — Geoscape Administrative Boundaries",
+    "source": "https://data.gov.au/data/dataset/wa-suburb-locality-boundaries-geoscape-administrative-boundaries",
+    "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "attributionText": "Administrative Boundaries © Geoscape Australia licensed by the Commonwealth of Australia under Creative Commons Attribution 4.0 International licence (CC BY 4.0).",
+    "buildDate": "2026-10-06T19:44:57.626Z"
+  },
+  "bbox": {
+    "sourceCrs": "EPSG:7844",
+    "sourceUnits": "degrees",
+    "source": [
+      115.5,
+      -32.5,
+      116.2,
+      -31.7
+    ],
+    "outputCrs": "EPSG:3857",
+    "outputUnits": "meters",
+    "output": [
+      12851739,
+      -3843316,
+      12972562,
+      -3710541
+    ]
+  },
+  "counts": {
+    "features": 357,
+    "distinctLocalities": 355,
+    "collisions": 2
+  }
+}
