@@ -122,9 +122,19 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
           crossorigin=""></script>
-  <script>
+  <script type="module">
     // PROTOTYPE — minimal vertical slice. Validates tickets 03, 04, 05, 06, 07, 08.
     // State lives in memory; URL hash mirrors it. Throwaway.
+
+    import {
+      exportFilename,
+      mercatorToLngLat,
+      selectionBoundsInLatLng,
+      padBoundsLatLng,
+      expandToMin,
+      polygonCentroidLngLat,
+      tileRangeForBounds,
+    } from './scripts/export-pipeline.mjs';
 
     const PINK_FILL = '#f472b6';
     const PINK_BORDER = '#be185d';
@@ -363,9 +373,207 @@
     }
 
     exportBtn.addEventListener('click', () => {
-      // Stub — ticket 02's custom canvas pipeline ships the real implementation.
-      alert(`Export stub. Would render ${selected.size} selected suburb(s) to a 2× PNG, cropped +5% lat/lng padding, min 1024×1024 px.`);
+      // Custom canvas pipeline (ticket 13). ~150 lines below.
+      exportPng();
     });
+
+    // ---- Export PNG pipeline (ticket 13) ----
+    // Custom canvas pipeline: white background, OSM tiles via Image +
+    // crossOrigin, polygons redrawn from the in-memory GeoJSON in Web
+    // Mercator projected to pixel coords at the current zoom, labels and
+    // attribution redrawn with a white halo. Pure math helpers come from
+    // scripts/export-pipeline.mjs (also imported by the test suite).
+
+    const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    const TILE_SIZE = 256;
+    const SCALE = 2;                  // 2× CSS-pixel rendering (ticket 13)
+    const EXPORT_MIN_PX = 1024;       // minimum canvas dimension (ticket 13)
+    const PAD_FRACTION = 0.05;        // bbox padding (ticket 06 / 13)
+
+    // Cache tile images so re-exports in the same session don't re-hit OSM.
+    const tileCache = new Map();
+    function loadTile(z, x, y) {
+      const key = `${z}/${x}/${y}`;
+      const cached = tileCache.get(key);
+      if (cached) return cached;
+      const p = new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error(`tile ${key} failed to load`));
+        img.src = TILE_URL.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+      });
+      tileCache.set(key, p);
+      return p;
+    }
+
+    function loadAllTiles(z, tileList) {
+      return Promise.all(tileList.map((t) => loadTile(z, t.x, t.y).then(
+        (img) => ({ img, t }),
+        (err) => ({ err, t }), // tolerate a single missing tile
+      )));
+    }
+
+    function drawPolygon(ctx, feature, nw, dx, dy, project, scale) {
+      const rings = feature.geometry.type === 'MultiPolygon'
+        ? feature.geometry.coordinates.flat()
+        : feature.geometry.coordinates;
+      ctx.beginPath();
+      for (const ring of rings) {
+        for (let i = 0; i < ring.length; i++) {
+          const [mx, my] = ring[i];
+          const [lng, lat] = mercatorToLngLat(mx, my);
+          const p = project(lat, lng);
+          const cx = (p.x - nw.x) * scale + dx;
+          const cy = (p.y - nw.y) * scale + dy;
+          if (i === 0) ctx.moveTo(cx, cy);
+          else ctx.lineTo(cx, cy);
+        }
+        ctx.closePath();
+      }
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    function drawLabel(ctx, text, x, y, scale) {
+      ctx.font = `${13 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+      ctx.fillStyle = '#1f2937';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // 4-direction white halo — mirrors the page's text-shadow rule (ticket 05).
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 0;
+      for (const [ox, oy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        ctx.shadowOffsetX = ox * scale;
+        ctx.shadowOffsetY = oy * scale;
+        ctx.fillText(text, x, y);
+      }
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.fillText(text, x, y);
+    }
+
+    function drawAttribution(ctx, w, h, scale) {
+      ctx.font = `${9 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      const padding = 8 * scale;
+      const lineH = 9 * scale;
+      ctx.fillStyle = '#1f2937';
+      // White halo for attribution on top of busy tiles.
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 3 * scale;
+      ctx.fillText('Suburbs © Geoscape Australia (CC BY 4.0)', w - padding, h - padding - lineH);
+      ctx.fillText('Map © OpenStreetMap contributors', w - padding, h - padding);
+      ctx.shadowBlur = 0;
+      ctx.fillText('Suburbs © Geoscape Australia (CC BY 4.0)', w - padding, h - padding - lineH);
+      ctx.fillText('Map © OpenStreetMap contributors', w - padding, h - padding);
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    let exporting = false;
+    async function exportPng() {
+      if (selected.size === 0 || exporting) return;
+      exporting = true;
+      exportBtn.disabled = true;
+      try {
+        const baseBounds = selectionBoundsInLatLng(suburbsData, selected);
+        if (!baseBounds) return;
+        const padded = padBoundsLatLng(baseBounds, PAD_FRACTION);
+
+        const zoom = map.getZoom();
+        const CRS = L.CRS.EPSG3857;
+        // Absolute pixel coords at zoom `zoom` (independent of the map's
+        // current pan). The CRS gives world-pixel coords; the map's own
+        // project() applies a transformation we don't want here.
+        const project = (lat, lng) => CRS.latLngToPoint(L.latLng(lat, lng), zoom);
+        const nw = project(padded.maxLat, padded.minLng);
+        const se = project(padded.minLat, padded.maxLng);
+        const paddedW = se.x - nw.x;
+        const paddedH = se.y - nw.y;
+
+        const exp = expandToMin({ width: paddedW, height: paddedH }, EXPORT_MIN_PX);
+        const dxPx = exp.dx * SCALE;
+        const dyPx = exp.dy * SCALE;
+        const canvasW = exp.width * SCALE;
+        const canvasH = exp.height * SCALE;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = canvasW;
+        canvas.height = canvasH;
+        const ctx = canvas.getContext('2d');
+
+        // White background.
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+
+        // Tiles.
+        const tiles = tileRangeForBounds(padded, zoom);
+        const loaded = await loadAllTiles(zoom, tiles);
+        for (const { img, t, err } of loaded) {
+          if (err) continue;
+          const tilePx = L.point(t.x * TILE_SIZE, t.y * TILE_SIZE);
+          ctx.drawImage(
+            img,
+            (tilePx.x - nw.x) * SCALE + dxPx,
+            (tilePx.y - nw.y) * SCALE + dyPx,
+            TILE_SIZE * SCALE,
+            TILE_SIZE * SCALE,
+          );
+        }
+
+        // Selected polygons.
+        ctx.fillStyle = 'rgba(244, 114, 182, 0.6)';
+        ctx.strokeStyle = '#be185d';
+        ctx.lineWidth = 2 * SCALE;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        for (const id of selected) {
+          const feature = suburbsData.features.find((f) => f.properties.id === id);
+          if (!feature) continue;
+          drawPolygon(ctx, feature, nw, dxPx, dyPx, project, SCALE);
+        }
+
+        // Labels.
+        for (const id of selected) {
+          const feature = suburbsData.features.find((f) => f.properties.id === id);
+          if (!feature) continue;
+          const c = polygonCentroidLngLat(feature);
+          const p = project(c.lat, c.lng);
+          const cx = (p.x - nw.x) * SCALE + dxPx;
+          const cy = (p.y - nw.y) * SCALE + dyPx;
+          drawLabel(ctx, labelText(feature), cx, cy, SCALE);
+        }
+
+        // Attribution.
+        drawAttribution(ctx, canvasW, canvasH, SCALE);
+
+        await new Promise((resolve, reject) => {
+          canvas.toBlob((blob) => {
+            if (!blob) { reject(new Error('canvas.toBlob returned null')); return; }
+            downloadBlob(blob, exportFilename());
+            resolve();
+          }, 'image/png');
+        });
+      } catch (e) {
+        console.error(e);
+        alert(`Export failed: ${e.message}`);
+      } finally {
+        exporting = false;
+        refreshControls();
+      }
+    }
 
     clearBtn.addEventListener('click', () => {
       const ids = [...selected];
