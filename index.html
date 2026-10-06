@@ -82,9 +82,18 @@
     }
     /* Override Leaflet attribution (we render our own footer per ticket 07) */
     .leaflet-control-attribution { display: none; }
-    @media (max-width: 640px) {
-      .controls { padding: 6px 8px; }
-      .controls button { padding: 10px 14px; }
+    /* Mobile bottom-bar layout (ticket 14): below 600 px, the controls
+       swap to render between the map and the footer. We keep the DOM
+       order stable so the same nodes just reflow — no resize flash. */
+    @media (max-width: 599px) {
+      #map { order: 1; }
+      .controls { order: 2; }
+      .footer { order: 3; }
+      .controls button {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 10px 14px;
+      }
     }
   </style>
 </head>
