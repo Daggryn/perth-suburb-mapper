@@ -61,6 +61,25 @@
       flex-shrink: 0;
     }
     .footer a { color: var(--fg-link); }
+    /* Mobile footer collapse (ticket 15): on viewports < 600 px the
+       footer auto-collapses to a small "i" button 2 s after load and
+       re-collapses 5 s after a tap-to-expand. On desktop the button is
+       always hidden. The two states share one DOM tree — JS flips a data
+       attribute and CSS swaps which child is visible. */
+    .footer-info {
+      display: none;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid var(--fg-footer);
+      background: var(--bg-footer);
+      color: var(--fg-footer);
+      font: 600 14px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+    }
     .suburb-label {
       font: 13px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
       color: var(--label-fg);
@@ -94,6 +113,17 @@
         min-width: 44px;
         padding: 10px 14px;
       }
+      /* Footer auto-collapse (ticket 15). The collapsed state hides the
+         attribution text and reveals the "i" button as a flex item so it
+         stays inside the footer's box (an absolutely-positioned button
+         would hang below the footer when its content is hidden and the
+         footer shrinks to just padding). Expanded state is the default;
+         JS flips the `data-collapsed` attribute on a 2 s / 5 s timer. */
+      .footer[data-collapsed="true"] .footer-info {
+        display: flex;
+        align-self: flex-end;
+      }
+      .footer[data-collapsed="true"] .footer-content { display: none; }
     }
   </style>
 </head>
@@ -103,15 +133,19 @@
     <button id="clear-btn" disabled>Clear</button>
   </div>
   <div id="map"></div>
-  <div class="footer">
-    <div>
-      Suburbs ©
-      <a href="https://data.gov.au/data/dataset/wa-suburb-locality-boundaries-geoscape-administrative-boundaries">Geoscape Australia</a>
-      (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>)
-    </div>
-    <div>
-      Map ©
-      <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>
+  <div class="footer" id="footer" data-collapsed="false">
+    <button class="footer-info" id="footer-info" type="button"
+            aria-label="Show attribution" aria-expanded="true">i</button>
+    <div class="footer-content">
+      <div>
+        Suburbs ©
+        <a href="https://data.gov.au/data/dataset/wa-suburb-locality-boundaries-geoscape-administrative-boundaries">Geoscape Australia</a>
+        (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>)
+      </div>
+      <div>
+        Map ©
+        <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>
+      </div>
     </div>
   </div>
   <noscript>
@@ -589,6 +623,73 @@
       refreshControls();
       scheduleUrlWrite();
     });
+
+    // ---- Footer auto-collapse (ticket 15) ----
+    // On viewports < 600 px the attribution footer auto-collapses to a
+    // small "i" button 2 s after load, and re-collapses 5 s after the
+    // user taps it to expand. On desktop (>= 600 px) the footer is always
+    // visible. The two states share one DOM tree — JS flips the footer's
+    // `data-collapsed` attribute and CSS swaps which child is visible.
+    const FOOTER_BREAKPOINT_PX = 599;        // matches the CSS @media
+    const FOOTER_INITIAL_COLLAPSE_MS = 2000; // ticket 15: collapse 2 s after load
+    const FOOTER_TAP_RECOLLAPSE_MS = 5000;   // ticket 15: collapse 5 s after a tap-expand
+    const footerEl = document.getElementById('footer');
+    const footerInfoEl = document.getElementById('footer-info');
+    const footerMql = window.matchMedia(`(max-width: ${FOOTER_BREAKPOINT_PX}px)`);
+    let footerCollapseTimer = null;
+
+    function footerIsMobile() {
+      return footerMql.matches;
+    }
+
+    function footerSetCollapsed(collapsed) {
+      footerEl.dataset.collapsed = collapsed ? 'true' : 'false';
+      footerInfoEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    }
+
+    function footerCancelCollapse() {
+      if (footerCollapseTimer !== null) {
+        clearTimeout(footerCollapseTimer);
+        footerCollapseTimer = null;
+      }
+    }
+
+    function footerScheduleCollapse(ms) {
+      footerCancelCollapse();
+      footerCollapseTimer = setTimeout(() => {
+        footerCollapseTimer = null;
+        footerSetCollapsed(true);
+      }, ms);
+    }
+
+    function footerApplyToViewport() {
+      if (!footerIsMobile()) {
+        // Desktop: never collapse. Cancel any pending collapse and force
+        // the expanded state so the attribution is always reachable.
+        footerCancelCollapse();
+        footerSetCollapsed(false);
+      } else {
+        // Mobile: start expanded, then auto-collapse after the initial
+        // delay. A resize from desktop into mobile should re-arm this.
+        footerSetCollapsed(false);
+        footerScheduleCollapse(FOOTER_INITIAL_COLLAPSE_MS);
+      }
+    }
+
+    footerInfoEl.addEventListener('click', () => {
+      footerCancelCollapse();
+      footerSetCollapsed(false);
+      if (footerIsMobile()) {
+        footerScheduleCollapse(FOOTER_TAP_RECOLLAPSE_MS);
+      }
+    });
+
+    // React when the viewport crosses the breakpoint so we don't end up
+    // stuck in the wrong state if the user rotates their phone or
+    // resizes the window.
+    footerMql.addEventListener('change', footerApplyToViewport);
+
+    footerApplyToViewport();
 
     // ---- Boot ----
     (async () => {
