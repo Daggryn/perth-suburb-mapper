@@ -176,21 +176,41 @@ async function main() {
     console.log('BORDER_PROBE', JSON.stringify(borderProbe));
 
     // ---- Issue #3 probe ----
-    // Locate any rendered suburb label.
+    // Locate any rendered suburb label and the corresponding selected
+    // polygon. The "right" answer is: the label's bounding-box centre
+    // sits on the polygon's bbox-centre (the marker's anchor point —
+    // see addLabel: `layer.getBounds().getCenter()`).
+    //
+    // `text-align: center` alone is not enough — it centres text inside
+    // the span, but the span itself is anchored at the centroid's
+    // top-left via L.divIcon's `iconAnchor: [0, 0]`, so the span (and
+    // therefore the text) is offset right of the centroid by half the
+    // span width. The full fix shifts the span (e.g.
+    // `transform: translateX(-50%)`) so the text's centre lands on the
+    // anchor point.
     const labelProbe = await page.evaluate(() => {
       const span = document.querySelector('span.suburb-label');
       if (!span) return null;
+      // Find the selected polygon whose bbox-centre matches the marker's
+      // latLng. We rely on addLabel: `layer.getBounds().getCenter()` —
+      // so the marker's latLng is the polygon's bbox-centre.
+      const selected = document.querySelector('path.leaflet-interactive[fill-opacity="0.6"]');
+      if (!selected) return null;
       const cs = window.getComputedStyle(span);
+      const spanRect = span.getBoundingClientRect();
+      const polyRect = selected.getBoundingClientRect();
+      const spanCenterX = spanRect.left + spanRect.width / 2;
+      const spanCenterY = spanRect.top + spanRect.height / 2;
+      const centroidX = polyRect.left + polyRect.width / 2;
+      const centroidY = polyRect.top + polyRect.height / 2;
       return {
         text: (span.textContent || '').slice(0, 30),
         cssTextAlign: cs.textAlign,
-        attrTextAlign: span.getAttribute('style') || '',
-        // Bounding box relative to its L.marker icon container so we can
-        // sanity-check the centroid relationship.
-        rect: (() => {
-          const r = span.getBoundingClientRect();
-          return { left: r.left, top: r.top, w: r.width, h: r.height };
-        })(),
+        cssTransform: cs.transform,
+        spanCenter: { x: spanCenterX, y: spanCenterY },
+        centroid: { x: centroidX, y: centroidY },
+        offsetX: spanCenterX - centroidX,
+        offsetY: spanCenterY - centroidY,
       };
     });
     console.log('LABEL_PROBE', JSON.stringify(labelProbe));
@@ -218,8 +238,22 @@ async function main() {
       && widthAttr >= 2
       && strokeOpacityOk;
 
-    // Issue #3: computed text-align of the span must be centre.
-    const issue3Pass = labelProbe?.cssTextAlign === 'center';
+    // Issue #3: the rendered label's visual centre must sit on the polygon
+    // bbox-centre (the marker's anchor point). The original bug had text
+    // left-aligned inside a box anchored at the centroid's top-left, so
+    // the text trailed right; the partial fix `text-align: center` alone
+    // left the box anchored at the centroid, so the now-centred text was
+    // still offset right by half the box width. We assert the
+    // pixel-level offset directly.
+    const offsetX = labelProbe?.offsetX;
+    const offsetY = labelProbe?.offsetY;
+    const TOL_PX = 1.5;
+    const issue3Pass =
+      labelProbe != null
+      && Number.isFinite(offsetX)
+      && Number.isFinite(offsetY)
+      && Math.abs(offsetX) <= TOL_PX
+      && Math.abs(offsetY) <= TOL_PX;
 
     console.log('RESULT', JSON.stringify({
         issue2Pass,
@@ -236,7 +270,13 @@ async function main() {
           issue2: issue2Pass ? null : {
             strokeAttr, strokeCss, widthAttr, widthCss, strokeOpacityAttr,
           },
-          issue3: issue3Pass ? null : { cssTextAlign: labelProbe?.cssTextAlign },
+          issue3: issue3Pass ? null : {
+            cssTextAlign: labelProbe?.cssTextAlign,
+            cssTransform: labelProbe?.cssTransform,
+            offsetX, offsetY,
+            spanCenter: labelProbe?.spanCenter,
+            centroid: labelProbe?.centroid,
+          },
         },
       }));
       exitCode = 1;

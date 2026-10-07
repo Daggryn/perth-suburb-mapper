@@ -74,6 +74,18 @@
       font: var(--label-font-size) / var(--label-line-height) var(--label-font-family);
       color: var(--label-fg);
       text-align: center;
+      /* Shift the span so its visual centre lands on the marker's anchor
+         (the polygon's bbox-centre). L.divIcon's iconAnchor is [0, 0], so
+         the span's top-left is anchored at the centroid; without this shift
+         the centred text is offset right of the centroid by half the span
+         width. With `display: inline-block` + `transform: translate(-50%, -50%)`
+         the centred text sits on top of the centroid anchor (issue #3).
+         The inline-block gives the span a defined box size so the -50%
+         translates resolve to half its own width / height — on a plain
+         inline element the percentages have nothing to resolve against and
+         the transform collapses to identity. */
+      display: inline-block;
+      transform: translate(-50%, -50%);
       text-shadow:
         -1px -1px 0 var(--label-halo),
          1px -1px 0 var(--label-halo),
