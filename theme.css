@@ -1,0 +1,63 @@
+/* ============================================================================
+   theme.css — design tokens for the Perth Suburb Mapper.
+   ----------------------------------------------------------------------------
+   This is the only file the client should need to edit to restyle the app.
+   Every visual decision lives here. If a value isn't here, it should probably
+   either move here or stay as a per-component constant.
+   ----------------------------------------------------------------------------
+   Pinks (issue #1 area, hover preview, selected border, label-edit outline)
+   ----------------------------------------------------------------------------
+   --pink-fill       Fill colour of a selected suburb polygon.
+   --pink-fill-hover Pink preview tint shown on mouseover for an unselected
+                     suburb (also used as the selected fill in some passes).
+   --pink-border     Stroke colour around a selected polygon.
+   --pink-edit       Outline colour of a label that has been clicked into
+                     edit mode.
+   ----------------------------------------------------------------------------
+   Labels (the suburb-name markers shown over selected polygons)
+   ----------------------------------------------------------------------------
+   --label-fg            Foreground colour of the on-map label.
+   --label-halo          Halo colour drawn around the label so it stays
+                         legible on busy tiles.
+   --label-font-family   Font stack used for the on-map label. The canvas
+                         export reads the same value, so changing it here
+                         also changes the exported PNG.
+   --label-font-size     Pixel size of the on-map label at 1× CSS. The canvas
+                         export multiplies by its render scale (currently 2×).
+   --label-line-height   Line-height of the on-map label.
+   ----------------------------------------------------------------------------
+   Surfaces & text
+   ----------------------------------------------------------------------------
+   --bg-footer     Background colour of the attribution footer.
+   --fg-footer     Foreground colour of the attribution footer text.
+   --fg-link       Colour of the attribution links.
+   --control-bg    Background colour of the top/bottom control bar.
+   --control-fg    Foreground colour of the control-bar text and buttons.
+   --body-font     Default font stack for the body (used for the controls and
+                   footer too, unless overridden below).
+   --footer-info-font  Font shorthand for the mobile "i" toggle button.
+   ========================================================================== */
+
+:root {
+  /* Pinks */
+  --pink-fill:       #f472b6;
+  --pink-fill-hover: #f472b6;
+  --pink-border:     #be185d;
+  --pink-edit:       #f472b6;
+
+  /* Labels */
+  --label-fg:          #1f2937;
+  --label-halo:        #ffffff;
+  --label-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --label-font-size:   13px;
+  --label-line-height: 1.2;
+
+  /* Surfaces & text */
+  --bg-footer:        #f9fafb;
+  --fg-footer:        #4b5563;
+  --fg-link:          #1d4ed8;
+  --control-bg:       #ffffff;
+  --control-fg:       #1f2937;
+  --body-font:        system-ui, -apple-system, "Segoe UI", sans-serif;
+  --footer-info-font: 600 14px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
