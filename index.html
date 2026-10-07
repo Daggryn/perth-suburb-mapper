@@ -73,6 +73,7 @@
     .suburb-label {
       font: var(--label-font-size) / var(--label-line-height) var(--label-font-family);
       color: var(--label-fg);
+      text-align: center;
       text-shadow:
         -1px -1px 0 var(--label-halo),
          1px -1px 0 var(--label-halo),
@@ -205,13 +206,18 @@
           fillOpacity: 0.6,
         };
       }
-      // Idle + hover (decided separately by mouseover/out)
+      // Idle + hover (decided separately by mouseover/out). No `opacity: 0`
+      // here — Leaflet's `setStyle` MERGES style options rather than
+      // replacing them, so an `opacity` key set on idle would leak into
+      // the selected style on every subsequent click and Leaflet's SVG
+      // renderer would paint `stroke-opacity="0"` from it (issue #2:
+      // selected-suburb border was invisible because the stroke was
+      // painted fully see-through).
       return {
         weight: 0,
         color: 'transparent',
         fillColor: PINK_FILL,
         fillOpacity: 0,
-        opacity: 0,
       };
     }
 

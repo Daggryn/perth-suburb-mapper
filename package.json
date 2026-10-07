@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test scripts/*.test.mjs",
-    "test:e2e": "node scripts/click-loop.mjs"
+    "test:e2e": "node scripts/click-loop.mjs",
+    "test:style": "node scripts/style-loop.mjs"
   },
   "repository": {
     "type": "git",
